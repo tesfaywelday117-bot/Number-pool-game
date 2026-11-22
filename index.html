@@ -5,10 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Player Board — Number Pool</title>
   <link rel="stylesheet" href="style.css" />
+  <style>
+    .lookup-box {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.14);
+    }
+    .lookup-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .lookup-row input {
+      flex: 1;
+    }
+    .lookup-results {
+      margin-top: 10px;
+      font-size: 0.92rem;
+    }
+    .lookup-batch {
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .badge-pending {
+      color: #ffd166;
+      font-weight: 700;
+    }
+    .badge-approved {
+      color: #7ef2a6;
+      font-weight: 700;
+    }
+  </style>
 </head>
 <body>
   <div class="box">
-    <h2>Select Your Numbers & Upload Payment Screenshot</h2>
+    <h2>Select Your Numbers & Enter Phone Number</h2>
 
     <div class="payment-banner">
       <div><strong>Payment Account (Send Stake Here):</strong></div>
@@ -29,11 +62,20 @@
 
     <form id="proof-form" class="form">
       <input id="player-name" type="text" placeholder="Write your full name" required />
-      <input id="screenshot-file" type="file" accept="image/*" required />
+      <input id="player-phone" type="tel" placeholder="Your phone number (e.g., 0912345678)" required />
       <button id="submit-btn" type="submit" class="btn-primary">Submit</button>
     </form>
 
-    <div id="status" class="status">Select any numbers you want, write your name, upload your screenshot, and tap Submit.</div>
+    <div id="status" class="status">Select any numbers you want, enter your name and phone number, and tap Submit.</div>
+
+    <div class="lookup-box">
+      <div><strong>Check My Numbers (By Phone Number)</strong></div>
+      <div class="lookup-row">
+        <input id="lookup-phone" type="tel" placeholder="Enter phone number to check status" />
+        <button id="lookup-btn" type="button" class="btn-primary">Check</button>
+      </div>
+      <div id="lookup-results" class="lookup-results"></div>
+    </div>
   </div>
 
   <script type="module">
@@ -46,6 +88,19 @@
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let selectedNums = new Set();
     let currentStake = 100;
+    let latestEntries = [];
+
+    function escapeHtml(str) {
+      return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function normalizePhone(phone) {
+      return String(phone ?? "").trim().replace(/\s+/g, "");
+    }
 
     function updatePickSummary() {
       const picks = Array.from(selectedNums).sort((a, b) => a - b);
@@ -57,8 +112,15 @@
 
     async function fetchGameState() {
       const [{ data: stateRow, error: stateErr }, { data: entriesRows, error: entriesErr }] = await Promise.all([
-        supabase.from("pool_state").select("*").eq("id", "main").single(),
-        supabase.from("pool_entries").select("*").order("created_at", { ascending: true }),
+        supabase
+          .from("pool_state")
+          .select("max_players, stake_amount, payment_account, last_announcement")
+          .eq("id", "main")
+          .single(),
+        supabase
+          .from("pool_entries")
+          .select("id, player, phone_number, batch_id, num, status, created_at")
+          .order("created_at", { ascending: true }),
       ]);
 
       if (stateErr || entriesErr) {
@@ -123,8 +185,63 @@
       }
     }
 
+    function renderLookupResults(rawPhone = null) {
+      const inputEl = document.getElementById("lookup-phone");
+      const outEl = document.getElementById("lookup-results");
+      const phone = normalizePhone(rawPhone !== null ? rawPhone : inputEl.value);
+
+      if (!phone) {
+        outEl.innerHTML = "";
+        return;
+      }
+
+      const matching = latestEntries.filter((e) => normalizePhone(e.phone_number) === phone);
+      if (matching.length === 0) {
+        outEl.innerHTML = `<div>No active numbers found for <strong>${escapeHtml(phone)}</strong>.</div>`;
+        return;
+      }
+
+      const groups = new Map();
+      for (const entry of matching) {
+        const key = entry.batch_id || `single-${entry.id}`;
+        if (!groups.has(key)) {
+          groups.set(key, {
+            player: entry.player || "Player",
+            phone: entry.phone_number || phone,
+            items: [],
+          });
+        }
+        groups.get(key).items.push(entry);
+      }
+
+      outEl.innerHTML = Array.from(groups.values())
+        .map((g) => {
+          const sortedNums = g.items
+            .map((x) => Number(x.num))
+            .sort((a, b) => a - b)
+            .map((n) => `#${n}`)
+            .join(", ");
+          const statuses = Array.from(new Set(g.items.map((x) => x.status || "pending")));
+          const statusText =
+            statuses.length === 1 && statuses[0] === "approved"
+              ? `<span class="badge-approved">Approved</span>`
+              : statuses.length === 1 && statuses[0] === "pending"
+              ? `<span class="badge-pending">Pending Admin Approval</span>`
+              : `<span class="badge-pending">${escapeHtml(statuses.join(" / "))}</span>`;
+
+          return `
+            <div class="lookup-batch">
+              <div><strong>${escapeHtml(g.player)}</strong> (${escapeHtml(g.phone)}) — ${statusText}</div>
+              <div>Numbers (${g.items.length}): <strong>${sortedNums}</strong></div>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
     async function renderPlayerUI() {
       const state = await fetchGameState();
+      latestEntries = state.entries;
       currentStake = state.stakeAmount;
       const approvedCount = state.entries.filter((e) => e.status === "approved").length;
       const pot = approvedCount * currentStake;
@@ -137,16 +254,19 @@
       document.getElementById("status").textContent = state.lastAnnouncement;
 
       buildGrid(state);
+      if (document.getElementById("lookup-phone").value.trim()) {
+        renderLookupResults();
+      }
     }
 
-    function fileToDataUrl(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-    }
+    document.getElementById("lookup-btn").addEventListener("click", () => {
+      const phone = document.getElementById("lookup-phone").value.trim();
+      if (!phone) {
+        document.getElementById("lookup-results").innerHTML = "<div>Please enter a phone number first.</div>";
+        return;
+      }
+      renderLookupResults(phone);
+    });
 
     document.getElementById("proof-form").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -157,28 +277,28 @@
       }
 
       const nameInput = document.getElementById("player-name");
-      const fileInput = document.getElementById("screenshot-file");
+      const phoneInput = document.getElementById("player-phone");
       const submitBtn = document.getElementById("submit-btn");
-      const file = fileInput.files[0];
 
-      if (!file) {
-        alert("Please upload your payment screenshot.");
+      const playerName = nameInput.value.trim();
+      const phoneNumber = normalizePhone(phoneInput.value);
+
+      if (!playerName || !phoneNumber) {
+        alert("Please enter both your full name and your phone number.");
         return;
       }
 
       submitBtn.disabled = true;
       submitBtn.textContent = "Submitting...";
 
-      const previewDataUrl = await fileToDataUrl(file);
-      const playerName = nameInput.value.trim();
-      const batchId = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
       const rowsToInsert = picks.map((num) => ({
         id: `${batchId}-${num}`,
         player: playerName,
+        phone_number: phoneNumber,
+        batch_id: batchId,
         num,
-        file_name: file.name,
-        preview_data_url: previewDataUrl,
         status: "pending",
       }));
 
@@ -196,17 +316,19 @@
       await supabase
         .from("pool_state")
         .update({
-          last_announcement: `Submitted! ${playerName} locked ${picks.length} number(s) (${picks.length * currentStake} ETB). Waiting for Admin approval.`,
+          last_announcement: `Submitted! ${playerName} (${phoneNumber}) locked ${picks.length} number(s) (${picks.length * currentStake} ETB). Waiting for Admin approval.`,
         })
         .eq("id", "main");
 
       selectedNums.clear();
       nameInput.value = "";
-      fileInput.value = "";
+      phoneInput.value = "";
+      document.getElementById("lookup-phone").value = phoneNumber;
       submitBtn.textContent = "Submitted!";
       submitBtn.className = "btn-submitted";
       updatePickSummary();
       await renderPlayerUI();
+      renderLookupResults(phoneNumber);
     });
 
     supabase
@@ -215,7 +337,7 @@
       .on("postgres_changes", { event: "*", schema: "public", table: "pool_state" }, () => renderPlayerUI())
       .subscribe();
 
-    setInterval(renderPlayerUI, 4000);
+    setInterval(renderPlayerUI, 12000);
     renderPlayerUI();
   </script>
 </body>
