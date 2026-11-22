@@ -33,7 +33,7 @@
         <div>Admin (25%): <strong id="admin-cut-share">0</strong> ETB</div>
       </div>
 
-      <div id="admin-status" class="status">Ready to review payment screenshots.</div>
+      <div id="admin-status" class="status">Ready. Submissions appear here as soon as a player clicks Submit & Lock Numbers.</div>
 
       <h4>1. Pending Payment Screenshots</h4>
       <div id="admin-queue" class="queue">No pending screenshots.</div>
@@ -163,12 +163,20 @@
       if (!item) return;
 
       if (approve) {
-        await supabase.from("pool_entries").update({ status: "approved" }).eq("id", id);
+        const { error } = await supabase.from("pool_entries").update({ status: "approved" }).eq("id", id);
+        if (error) {
+          alert(`Approve failed: ${error.message}`);
+          return;
+        }
         const msg = `APPROVED: ${item.player} on Number #${item.num}. Number locked into round.`;
         await supabase.from("pool_state").update({ last_announcement: msg }).eq("id", "main");
         document.getElementById("admin-status").textContent = msg;
       } else {
-        await supabase.from("pool_entries").delete().eq("id", id);
+        const { error } = await supabase.from("pool_entries").delete().eq("id", id);
+        if (error) {
+          alert(`Reject failed: ${error.message}`);
+          return;
+        }
         const msg = `REJECTED: ${item.player}'s screenshot. Number #${item.num} is selectable again.`;
         await supabase.from("pool_state").update({ last_announcement: msg }).eq("id", "main");
         document.getElementById("admin-status").textContent = msg;
@@ -184,7 +192,11 @@
       const val = input.value.trim();
       if (!val) return;
 
-      await supabase.from("pool_state").update({ payment_account: val }).eq("id", "main");
+      const { error } = await supabase.from("pool_state").update({ payment_account: val }).eq("id", "main");
+      if (error) {
+        alert(`Could not save account: ${error.message}`);
+        return;
+      }
       input.value = "";
       document.getElementById("admin-status").textContent = `Updated player payment account to: ${val}`;
       await renderAdminUI();
@@ -205,10 +217,15 @@
         return;
       }
 
-      await supabase
+      const { error } = await supabase
         .from("pool_state")
         .update({ max_players: newLimit, total_numbers: newLimit })
         .eq("id", "main");
+
+      if (error) {
+        alert(`Could not update limit: ${error.message}`);
+        return;
+      }
 
       document.getElementById("admin-status").textContent = `Max player limit updated to ${newLimit}.`;
       await renderAdminUI();
