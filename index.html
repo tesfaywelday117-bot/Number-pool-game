@@ -8,48 +8,40 @@
 </head>
 <body>
   <div class="box">
-    <h2>Pick Up to 5 Numbers & Send Screenshot</h2>
+    <h2>Select Your Numbers & Upload Payment Screenshot</h2>
 
     <div class="payment-banner">
-      <div><strong>Send Stake (<span id="stake-banner">100</span> ETB per number) To:</strong></div>
+      <div><strong>Payment Account (Send Stake Here):</strong></div>
       <div id="player-bank-display">Loading payment account...</div>
     </div>
 
     <div class="stats">
       <div>Stake / Number: <strong><span id="stake-stat">100</span> ETB</strong></div>
-      <div>Joined: <strong id="approved-count">0</strong> / <strong id="max-players-stat">200</strong></div>
-      <div>Pending: <strong id="pending-count">0</strong></div>
-      <div>Winner Prize: <strong id="winner-share">0</strong> ETB</div>
-    </div>
-
-    <div class="legend">
-      <span class="badge available">Available</span>
-      <span class="badge selected">Your Pick (Max 5)</span>
-      <span class="badge pending">Pending (Locked)</span>
-      <span class="badge approved">Approved (Locked)</span>
+      <div>Lot Numbers: <strong>1 – <span id="max-players-stat">200</span></strong></div>
+      <div>Winner Prize: <strong><span id="winner-share">0</span> ETB</strong></div>
     </div>
 
     <div id="grid" class="grid"></div>
 
     <div id="pick-summary" class="pick-summary">
-      Selected Numbers: <strong>None</strong> | Picks: <strong>0 / 5</strong> | Total Stake: <strong>0 ETB</strong>
+      Chosen Numbers: <strong>None</strong> | Total Stake to Pay: <strong>0 ETB</strong>
     </div>
 
     <form id="proof-form" class="form">
-      <input id="player-name" type="text" placeholder="Enter your full name" required />
+      <input id="player-name" type="text" placeholder="Write your full name" required />
       <input id="screenshot-file" type="file" accept="image/*" required />
-      <button type="submit" class="btn-primary">Submit & Lock Numbers</button>
+      <button id="submit-btn" type="submit" class="btn-primary">Submit</button>
     </form>
 
-    <div id="status" class="status">Pick up to 5 available numbers, enter your name, and upload your payment screenshot.</div>
+    <div id="status" class="status">Select any numbers you want, write your name, upload your screenshot, and tap Submit.</div>
   </div>
 
   <script type="module">
     import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-    const SUPABASE_URL = "https://wjvforynqwtsnowuthqc.supabase.co/rest/v1/";
-    const SUPABASE_ANON_KEY = "sb_publishable_0RCBCTU0R395x4_AH9cnTg_KAt2Vak6";
-    const MAX_PICKS_PER_PLAYER = 5;
+    // PASTE YOUR EXACT https://xxxx.supabase.co URL AND sb_publishable_... KEY BELOW
+    const SUPABASE_URL = "https://txvjpshxgasdbdygemis.supabase.co/rest/v1/".trim();
+    const SUPABASE_ANON_KEY = "sb_publishable_6oUoQaH7a-CYFG6o2Hu6zQ_e9OUIfeN".trim();
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let selectedNums = new Set();
@@ -60,7 +52,7 @@
       const label = picks.length ? picks.map((n) => `#${n}`).join(", ") : "None";
       const totalCost = picks.length * currentStake;
       document.getElementById("pick-summary").innerHTML =
-        `Selected Numbers: <strong>${label}</strong> | Picks: <strong>${picks.length} / ${MAX_PICKS_PER_PLAYER}</strong> | Total To Pay: <strong>${totalCost} ETB</strong>`;
+        `Chosen Numbers: <strong>${label}</strong> (${picks.length} picked) | Total Stake to Pay: <strong>${totalCost} ETB</strong>`;
     }
 
     async function fetchGameState() {
@@ -71,71 +63,60 @@
 
       if (stateErr || entriesErr) {
         const msg = (stateErr || entriesErr).message;
-        document.getElementById("player-bank-display").textContent = `Database connection error: ${msg}`;
+        document.getElementById("player-bank-display").textContent = `Connection Error: ${msg}`;
       }
 
       return {
-        stakeAmount: stateRow?.stake_amount ?? 100,
         maxPlayers: stateRow?.max_players ?? 200,
-        totalNumbers: stateRow?.total_numbers ?? 200,
-        paymentAccount: stateRow?.payment_account ?? "Telebirr / Bank: Set account in Admin Board",
-        lastAnnouncement: stateRow?.last_announcement ?? "Pick up to 5 numbers, enter your name, and upload your screenshot.",
+        stakeAmount: stateRow?.stake_amount ?? 100,
+        paymentAccount: stateRow?.payment_account ?? "Set your Telebirr / Bank account in Admin Board",
+        lastAnnouncement: stateRow?.last_announcement ?? "Ready.",
         entries: entriesRows ?? [],
       };
     }
 
-    function getNumberMap(entries) {
-      const map = new Map();
+    function getTakenSet(entries) {
+      const taken = new Set();
       for (const e of entries) {
         if (e.status === "pending" || e.status === "approved") {
-          map.set(Number(e.num), e.status);
+          taken.add(Number(e.num));
         }
       }
-      return map;
+      return taken;
     }
 
     function buildGrid(state) {
       const gridEl = document.getElementById("grid");
-      const numMap = getNumberMap(state.entries);
-      selectedNums = new Set([...selectedNums].filter((n) => !numMap.has(n)));
+      const takenSet = getTakenSet(state.entries);
+      selectedNums = new Set([...selectedNums].filter((n) => !takenSet.has(n)));
       updatePickSummary();
       gridEl.innerHTML = "";
 
-      for (let n = 1; n <= state.totalNumbers; n++) {
+      for (let n = 1; n <= state.maxPlayers; n++) {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.textContent = n;
         btn.className = "num";
-        btn.dataset.num = n;
 
-        const st = numMap.get(n);
-        if (st === "pending") {
-          btn.classList.add("pending");
-          btn.disabled = true;
-        } else if (st === "approved") {
-          btn.classList.add("approved");
+        if (takenSet.has(n)) {
+          btn.classList.add("hidden-num");
           btn.disabled = true;
         } else if (selectedNums.has(n)) {
           btn.classList.add("selected");
         }
 
-        btn.addEventListener("click", async () => {
-          const latest = await fetchGameState();
-          if (getNumberMap(latest.entries).has(n)) {
-            await renderPlayerUI();
-            return;
-          }
+        btn.addEventListener("click", () => {
           if (selectedNums.has(n)) {
             selectedNums.delete(n);
+            btn.classList.remove("selected");
           } else {
-            if (selectedNums.size >= MAX_PICKS_PER_PLAYER) {
-              alert(`You can pick a maximum of ${MAX_PICKS_PER_PLAYER} numbers.`);
-              return;
-            }
             selectedNums.add(n);
+            btn.classList.add("selected");
           }
+          const submitBtn = document.getElementById("submit-btn");
+          submitBtn.textContent = "Submit";
+          submitBtn.className = "btn-primary";
           updatePickSummary();
-          await renderPlayerUI();
         });
 
         gridEl.appendChild(btn);
@@ -145,18 +126,14 @@
     async function renderPlayerUI() {
       const state = await fetchGameState();
       currentStake = state.stakeAmount;
-      const approved = state.entries.filter((e) => e.status === "approved");
-      const pending = state.entries.filter((e) => e.status === "pending");
-      const pot = approved.length * currentStake;
-      const winnerShare = Number((pot * 0.75).toFixed(2));
+      const approvedCount = state.entries.filter((e) => e.status === "approved").length;
+      const pot = approvedCount * currentStake;
+      const winnerPrize = Number((pot * 0.75).toFixed(2));
 
-      document.getElementById("stake-banner").textContent = currentStake;
       document.getElementById("stake-stat").textContent = currentStake;
-      document.getElementById("player-bank-display").textContent = state.paymentAccount;
-      document.getElementById("approved-count").textContent = approved.length;
       document.getElementById("max-players-stat").textContent = state.maxPlayers;
-      document.getElementById("pending-count").textContent = pending.length;
-      document.getElementById("winner-share").textContent = winnerShare;
+      document.getElementById("winner-share").textContent = winnerPrize;
+      document.getElementById("player-bank-display").textContent = state.paymentAccount;
       document.getElementById("status").textContent = state.lastAnnouncement;
 
       buildGrid(state);
@@ -173,38 +150,28 @@
 
     document.getElementById("proof-form").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const state = await fetchGameState();
-      currentStake = state.stakeAmount;
-      const activeCount = state.entries.filter((x) => x.status === "approved" || x.status === "pending").length;
-      const numMap = getNumberMap(state.entries);
       const picks = Array.from(selectedNums).sort((a, b) => a - b);
-
-      if (picks.length < 1 || picks.length > MAX_PICKS_PER_PLAYER) {
-        alert(`Pick between 1 and ${MAX_PICKS_PER_PLAYER} available numbers first.`);
-        return;
-      }
-      if (activeCount + picks.length > state.maxPlayers) {
-        alert(`Not enough open slots left (max ${state.maxPlayers}).`);
-        return;
-      }
-      if (picks.some((n) => numMap.has(n))) {
-        alert("One of your picked numbers was already taken. Refreshing...");
-        selectedNums.clear();
-        await renderPlayerUI();
+      if (picks.length === 0) {
+        alert("Please select at least 1 number first.");
         return;
       }
 
       const nameInput = document.getElementById("player-name");
       const fileInput = document.getElementById("screenshot-file");
+      const submitBtn = document.getElementById("submit-btn");
       const file = fileInput.files[0];
+
       if (!file) {
-        alert("Please attach your payment screenshot.");
+        alert("Please upload your payment screenshot.");
         return;
       }
 
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Submitting...";
+
       const previewDataUrl = await fileToDataUrl(file);
       const playerName = nameInput.value.trim();
-      const batchId = String(Date.now()) + "-" + Math.random().toString(36).slice(2, 6);
+      const batchId = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
       const rowsToInsert = picks.map((num) => ({
         id: `${batchId}-${num}`,
@@ -216,8 +183,11 @@
       }));
 
       const { error } = await supabase.from("pool_entries").insert(rowsToInsert);
+      submitBtn.disabled = false;
+
       if (error) {
-        alert(`Could not lock numbers: ${error.message}`);
+        submitBtn.textContent = "Submit";
+        alert(`Error: ${error.message}`);
         selectedNums.clear();
         await renderPlayerUI();
         return;
@@ -226,25 +196,26 @@
       await supabase
         .from("pool_state")
         .update({
-          last_announcement: `Numbers [${picks.map((n) => "#" + n).join(", ")}] are now PENDING for ${playerName} (${picks.length * currentStake} ETB paid).`,
+          last_announcement: `Submitted! ${playerName} locked ${picks.length} number(s) (${picks.length * currentStake} ETB). Waiting for Admin approval.`,
         })
         .eq("id", "main");
 
       selectedNums.clear();
       nameInput.value = "";
       fileInput.value = "";
+      submitBtn.textContent = "Submitted!";
+      submitBtn.className = "btn-submitted";
       updatePickSummary();
       await renderPlayerUI();
     });
 
     supabase
-      .channel("player-realtime")
+      .channel("player-sync")
       .on("postgres_changes", { event: "*", schema: "public", table: "pool_entries" }, () => renderPlayerUI())
       .on("postgres_changes", { event: "*", schema: "public", table: "pool_state" }, () => renderPlayerUI())
       .subscribe();
 
-    setInterval(renderPlayerUI, 5000);
-    updatePickSummary();
+    setInterval(renderPlayerUI, 4000);
     renderPlayerUI();
   </script>
 </body>
