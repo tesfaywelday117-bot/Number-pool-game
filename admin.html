@@ -32,6 +32,11 @@
     .batch-meta {
       margin-bottom: 8px;
       line-height: 1.45;
+      word-break: break-word;
+    }
+    .batch-link {
+      color: #7dd3fc;
+      text-decoration: underline;
     }
     .batch-actions {
       display: flex;
@@ -69,17 +74,18 @@
       </div>
 
       <div id="decision-signal" class="decision-banner">Decision Signal: Waiting for your next Approve or Disapprove action.</div>
-      <div id="admin-status" class="status">Ready. Player phone entries appear below automatically.</div>
+      <div id="admin-status" class="status">Ready. Player phone entries and payment links appear below automatically.</div>
 
-      <h4>1. Player Phone Entries (Approve or Disapprove)</h4>
+      <h4>1. Player Payment Links & Phone Entries (Approve or Disapprove)</h4>
       <div id="admin-queue" class="queue">No pending entries.</div>
 
       <h4>2. Pick Random Winner (Unpredictable Hardware Random Draw)</h4>
       <button id="draw-btn" type="button" class="btn-green">Pick Random Winner Now</button>
 
-      <h4>3. Edit Payment Account (Shown on Player Board)</h4>
+      <h4>3. Owner's / Admin Account Name Board (Shown on Player Board)</h4>
       <form id="bank-form" class="form">
-        <input id="bank-input" type="text" placeholder="e.g., Telebirr 0914789200 or CBE 1000xxxx" required />
+        <input id="bank-owner-input" type="text" placeholder="Owner / Admin Account Name (e.g., Tesfaye Welday)" required />
+        <input id="bank-input" type="text" placeholder="Account / Telebirr (e.g., CBE 1000179843807)" required />
         <button type="submit" class="btn-primary">Save Account</button>
       </form>
 
@@ -100,7 +106,6 @@
   <script type="module">
     import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-    // PASTE YOUR EXACT https://xxxx.supabase.co URL, sb_publishable_... KEY, AND PASSWORD BELOW
     const SUPABASE_URL = "https://txvjpshxgasdbdygemis.supabase.co".trim();
     const SUPABASE_ANON_KEY = "sb_publishable_6oUoQaH7a-CYFG6o2Hu6zQ_e9OUIfeN".trim();
     const ADMIN_PASSWORD = "hrit@123";
@@ -115,6 +120,32 @@
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+
+    function getSafeHttpUrl(raw) {
+      const trimmed = String(raw ?? "").trim();
+      if (!trimmed) return null;
+      try {
+        const url = new URL(trimmed);
+        if (url.protocol === "http:" || url.protocol === "https:") {
+          return url.href;
+        }
+      } catch (_) {
+        return null;
+      }
+      return null;
+    }
+
+    function renderPaymentLinkHtml(rawLink) {
+      const clean = String(rawLink ?? "").trim();
+      if (!clean) {
+        return `<div>Payment Link/Ref: <em>None provided</em></div>`;
+      }
+      const safeUrl = getSafeHttpUrl(clean);
+      if (safeUrl) {
+        return `<div>Payment Link: <a class="batch-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(clean)}</a></div>`;
+      }
+      return `<div>Payment Ref: <strong>${escapeHtml(clean)}</strong></div>`;
     }
 
     function setSignal(message, mode = "neutral") {
@@ -135,7 +166,7 @@
           .single(),
         supabase
           .from("pool_entries")
-          .select("id, player, phone_number, batch_id, num, status, created_at")
+          .select("id, player, phone_number, batch_id, payment_link, num, status, created_at")
           .order("created_at", { ascending: true }),
       ]);
 
@@ -161,6 +192,7 @@
             key,
             player: item.player || "Player",
             phone: item.phone_number || "No phone",
+            paymentLink: item.payment_link || "",
             items: [],
           });
         }
@@ -230,6 +262,7 @@
           <div class="batch-meta">
             <div><strong>${escapeHtml(batch.player)}</strong> — Phone: <strong>${escapeHtml(batch.phone)}</strong></div>
             <div>Numbers (${sortedItems.length}): <strong>${escapeHtml(numListText)}</strong> (${batchTotal} ETB)</div>
+            ${renderPaymentLinkHtml(batch.paymentLink)}
           </div>
           <div class="batch-actions">
             <button type="button" class="btn-green" data-approve-batch="${escapeHtml(idsCsv)}">
@@ -322,14 +355,18 @@
     document.getElementById("bank-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       if (!isUnlocked) return;
-      const input = document.getElementById("bank-input");
-      const val = input.value.trim();
-      if (!val) return;
+      const ownerInput = document.getElementById("bank-owner-input");
+      const accInput = document.getElementById("bank-input");
+      const ownerName = ownerInput.value.trim();
+      const accDetails = accInput.value.trim();
+      if (!ownerName || !accDetails) return;
 
-      const { error } = await supabase.from("pool_state").update({ payment_account: val }).eq("id", "main");
+      const combinedAccount = `${ownerName} — ${accDetails}`;
+      const { error } = await supabase.from("pool_state").update({ payment_account: combinedAccount }).eq("id", "main");
       if (error) return alert(`Error: ${error.message}`);
-      input.value = "";
-      document.getElementById("admin-status").textContent = `Payment account updated to: ${val}`;
+      ownerInput.value = "";
+      accInput.value = "";
+      document.getElementById("admin-status").textContent = `Payment account updated to: ${combinedAccount}`;
       await renderAdminUI();
     });
 
