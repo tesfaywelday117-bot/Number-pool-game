@@ -33,6 +33,10 @@
 
     <div id="grid" class="grid"></div>
 
+    <div id="pick-summary" class="pick-summary">
+      Selected Numbers: <strong>None</strong> | Picks: <strong>0 / 5</strong> | Total Stake: <strong>0 ETB</strong>
+    </div>
+
     <form id="proof-form" class="form">
       <input id="player-name" type="text" placeholder="Enter your full name" required />
       <input id="screenshot-file" type="file" accept="image/*" required />
@@ -53,11 +57,23 @@
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let selectedNums = new Set();
 
+    function updatePickSummary() {
+      const picks = Array.from(selectedNums).sort((a, b) => a - b);
+      const label = picks.length ? picks.map((n) => `#${n}`).join(", ") : "None";
+      const totalCost = picks.length * STAKE;
+      document.getElementById("pick-summary").innerHTML =
+        `Selected Numbers: <strong>${label}</strong> | Picks: <strong>${picks.length} / ${MAX_PICKS_PER_PLAYER}</strong> | Total Stake: <strong>${totalCost} ETB</strong>`;
+    }
+
     async function fetchGameState() {
-      const [{ data: stateRow }, { data: entriesRows }] = await Promise.all([
+      const [{ data: stateRow, error: stateErr }, { data: entriesRows, error: entriesErr }] = await Promise.all([
         supabase.from("pool_state").select("*").eq("id", "main").single(),
         supabase.from("pool_entries").select("*").order("created_at", { ascending: true }),
       ]);
+
+      if (stateErr || entriesErr) {
+        console.error("Supabase read error:", stateErr || entriesErr);
+      }
 
       return {
         maxPlayers: stateRow?.max_players ?? 200,
@@ -82,6 +98,7 @@
       const gridEl = document.getElementById("grid");
       const numMap = getNumberMap(state.entries);
       selectedNums = new Set([...selectedNums].filter((n) => !numMap.has(n)));
+      updatePickSummary();
       gridEl.innerHTML = "";
 
       for (let n = 1; n <= state.totalNumbers; n++) {
@@ -117,6 +134,7 @@
             }
             selectedNums.add(n);
           }
+          updatePickSummary();
           await renderPlayerUI();
         });
 
@@ -163,7 +181,7 @@
       const picks = Array.from(selectedNums).sort((a, b) => a - b);
 
       if (picks.length < 1 || picks.length > MAX_PICKS_PER_PLAYER) {
-        alert(`Pick between 1 and ${MAX_PICKS_PER_PLAYER} available numbers.`);
+        alert(`Pick between 1 and ${MAX_PICKS_PER_PLAYER} available numbers first.`);
         return;
       }
       if (activeCount + picks.length > state.maxPlayers) {
@@ -171,7 +189,7 @@
         return;
       }
       if (picks.some((n) => numMap.has(n))) {
-        alert("One of your picked numbers was just taken. Refreshing...");
+        alert("One of your picked numbers was already taken. Refreshing...");
         selectedNums.clear();
         await renderPlayerUI();
         return;
@@ -200,7 +218,7 @@
 
       const { error } = await supabase.from("pool_entries").insert(rowsToInsert);
       if (error) {
-        alert("Could not lock one or more numbers (another player may have just picked them). Refreshing...");
+        alert(`Could not lock numbers: ${error.message}`);
         selectedNums.clear();
         await renderPlayerUI();
         return;
@@ -209,13 +227,14 @@
       await supabase
         .from("pool_state")
         .update({
-          last_announcement: `Numbers [${picks.map((n) => "#" + n).join(", ")}] are now PENDING for ${playerName} (locked until Admin approves or rejects).`,
+          last_announcement: `Numbers [${picks.map((n) => "#" + n).join(", ")}] are now PENDING for ${playerName} (${picks.length * STAKE} ETB total stake).`,
         })
         .eq("id", "main");
 
       selectedNums.clear();
       nameInput.value = "";
       fileInput.value = "";
+      updatePickSummary();
       await renderPlayerUI();
     });
 
@@ -229,6 +248,7 @@
       })
       .subscribe();
 
+    updatePickSummary();
     renderPlayerUI();
   </script>
 </body>
