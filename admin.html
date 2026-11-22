@@ -5,6 +5,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin Board — Owner Control</title>
   <link rel="stylesheet" href="style.css" />
+  <style>
+    .decision-banner {
+      padding: 10px 12px;
+      margin: 10px 0;
+      border-radius: 8px;
+      font-weight: 700;
+      background: #1e293b;
+      color: #e2e8f0;
+    }
+    .signal-approved {
+      background: #143624 !important;
+      color: #7ef2a6 !important;
+    }
+    .signal-disapproved {
+      background: #3a1920 !important;
+      color: #ff94a8 !important;
+    }
+    .batch-card {
+      padding: 12px;
+      margin-bottom: 10px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .batch-meta {
+      margin-bottom: 8px;
+      line-height: 1.45;
+    }
+    .batch-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+  </style>
 </head>
 <body>
   <div class="box">
@@ -33,10 +68,11 @@
         <div>Admin (25%): <strong id="admin-cut-share">0</strong> ETB</div>
       </div>
 
-      <div id="admin-status" class="status">Ready. Player screenshots appear below automatically.</div>
+      <div id="decision-signal" class="decision-banner">Decision Signal: Waiting for your next Approve or Disapprove action.</div>
+      <div id="admin-status" class="status">Ready. Player phone entries appear below automatically.</div>
 
-      <h4>1. Player Screenshots (Approve or Disapprove)</h4>
-      <div id="admin-queue" class="queue">No pending screenshots.</div>
+      <h4>1. Player Phone Entries (Approve or Disapprove)</h4>
+      <div id="admin-queue" class="queue">No pending entries.</div>
 
       <h4>2. Pick Random Winner (Unpredictable Hardware Random Draw)</h4>
       <button id="draw-btn" type="button" class="btn-green">Pick Random Winner Now</button>
@@ -71,11 +107,36 @@
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let isUnlocked = false;
+    let latestState = null;
+
+    function escapeHtml(str) {
+      return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function setSignal(message, mode = "neutral") {
+      const el = document.getElementById("decision-signal");
+      if (!el) return;
+      el.textContent = message;
+      el.classList.remove("signal-approved", "signal-disapproved");
+      if (mode === "approved") el.classList.add("signal-approved");
+      if (mode === "disapproved") el.classList.add("signal-disapproved");
+    }
 
     async function fetchGameState() {
       const [{ data: stateRow, error: stateErr }, { data: entriesRows, error: entriesErr }] = await Promise.all([
-        supabase.from("pool_state").select("*").eq("id", "main").single(),
-        supabase.from("pool_entries").select("*").order("created_at", { ascending: true }),
+        supabase
+          .from("pool_state")
+          .select("max_players, stake_amount, payment_account, last_announcement")
+          .eq("id", "main")
+          .single(),
+        supabase
+          .from("pool_entries")
+          .select("id, player, phone_number, batch_id, num, status, created_at")
+          .order("created_at", { ascending: true }),
       ]);
 
       if (stateErr || entriesErr) {
@@ -89,6 +150,23 @@
         paymentAccount: stateRow?.payment_account ?? "",
         entries: entriesRows ?? [],
       };
+    }
+
+    function groupPendingEntries(pending) {
+      const map = new Map();
+      for (const item of pending) {
+        const key = item.batch_id || `single-${item.id}`;
+        if (!map.has(key)) {
+          map.set(key, {
+            key,
+            player: item.player || "Player",
+            phone: item.phone_number || "No phone",
+            items: [],
+          });
+        }
+        map.get(key).items.push(item);
+      }
+      return Array.from(map.values());
     }
 
     document.getElementById("unlock-form").addEventListener("submit", async (e) => {
@@ -115,6 +193,7 @@
     async function renderAdminUI() {
       if (!isUnlocked) return;
       const state = await fetchGameState();
+      latestState = state;
       const stake = state.stakeAmount;
       const approved = state.entries.filter((x) => x.status === "approved");
       const pending = state.entries.filter((x) => x.status === "pending");
@@ -132,55 +211,108 @@
 
       const queueEl = document.getElementById("admin-queue");
       if (pending.length === 0) {
-        queueEl.textContent = "No pending screenshots.";
+        queueEl.textContent = "No pending entries.";
         return;
       }
 
+      const batches = groupPendingEntries(pending);
       queueEl.innerHTML = "";
-      pending.forEach((item) => {
-        const row = document.createElement("div");
-        row.className = "queue-item";
-        row.innerHTML = `
-          <div>
-            <strong>${item.player}</strong> — Number <strong>#${item.num}</strong> (${stake} ETB)<br/>
-            <small>${item.file_name}</small>
+
+      batches.forEach((batch) => {
+        const sortedItems = [...batch.items].sort((a, b) => Number(a.num) - Number(b.num));
+        const numListText = sortedItems.map((x) => `#${x.num}`).join(", ");
+        const idsCsv = sortedItems.map((x) => x.id).join(",");
+        const batchTotal = sortedItems.length * stake;
+
+        const card = document.createElement("div");
+        card.className = "batch-card";
+        card.innerHTML = `
+          <div class="batch-meta">
+            <div><strong>${escapeHtml(batch.player)}</strong> — Phone: <strong>${escapeHtml(batch.phone)}</strong></div>
+            <div>Numbers (${sortedItems.length}): <strong>${escapeHtml(numListText)}</strong> (${batchTotal} ETB)</div>
           </div>
-          <a href="${item.preview_data_url}" target="_blank" rel="noopener">
-            <img class="thumb" src="${item.preview_data_url}" alt="Screenshot" />
-          </a>
-          <div>
-            <button type="button" class="btn-green" data-approve="${item.id}">Approve</button>
-            <button type="button" class="btn-reject" data-reject="${item.id}">Disapprove</button>
+          <div class="batch-actions">
+            <button type="button" class="btn-green" data-approve-batch="${escapeHtml(idsCsv)}">
+              Approve All (${sortedItems.length})
+            </button>
+            <button type="button" class="btn-reject" data-reject-batch="${escapeHtml(idsCsv)}">
+              Disapprove All (${sortedItems.length})
+            </button>
           </div>
         `;
-        queueEl.appendChild(row);
+        queueEl.appendChild(card);
       });
 
-      queueEl.querySelectorAll("[data-approve]").forEach((btn) => {
-        btn.addEventListener("click", () => decideEntry(btn.dataset.approve, true));
+      queueEl.querySelectorAll("[data-approve-batch]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const ids = btn.dataset.approveBatch.split(",").filter(Boolean);
+          decideBatch(ids, true, btn);
+        });
       });
-      queueEl.querySelectorAll("[data-reject]").forEach((btn) => {
-        btn.addEventListener("click", () => decideEntry(btn.dataset.reject, false));
+
+      queueEl.querySelectorAll("[data-reject-batch]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const ids = btn.dataset.rejectBatch.split(",").filter(Boolean);
+          decideBatch(ids, false, btn);
+        });
       });
     }
 
-    async function decideEntry(id, approve) {
-      if (!isUnlocked) return;
-      const state = await fetchGameState();
-      const item = state.entries.find((x) => x.id === id);
-      if (!item) return;
+    async function decideBatch(ids, approve, clickedBtn = null) {
+      if (!isUnlocked || !ids.length) return;
+
+      const card = clickedBtn?.closest(".batch-card");
+      if (card) {
+        card.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      }
+
+      const allEntries = latestState?.entries ?? [];
+      const matchedItems = allEntries.filter((x) => ids.includes(String(x.id)));
+      const playerName = matchedItems[0]?.player || "Player";
+      const phoneNumber = matchedItems[0]?.phone_number || "No phone";
+      const numsLabel = matchedItems
+        .map((x) => `#${x.num}`)
+        .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))
+        .join(", ");
+
+      setSignal(
+        `Processing ${approve ? "APPROVAL" : "DISAPPROVAL"} for ${playerName} (${phoneNumber}) [${numsLabel || ids.length + " item(s)"}]...`,
+        "neutral"
+      );
 
       if (approve) {
-        const { error } = await supabase.from("pool_entries").update({ status: "approved" }).eq("id", id);
-        if (error) return alert(`Error: ${error.message}`);
-        const msg = `APPROVED: ${item.player} (Number #${item.num} locked in round).`;
+        const { error } = await supabase
+          .from("pool_entries")
+          .update({ status: "approved" })
+          .in("id", ids);
+
+        if (error) {
+          if (card) card.querySelectorAll("button").forEach((b) => (b.disabled = false));
+          setSignal(`FAILED to approve ${playerName} (${phoneNumber}): ${error.message}`, "disapproved");
+          return alert(`Error: ${error.message}`);
+        }
+
+        const msg = `APPROVED: ${playerName} (${phoneNumber}) — Numbers ${numsLabel} locked in round.`;
         await supabase.from("pool_state").update({ last_announcement: msg }).eq("id", "main");
+        if (card) card.remove();
+        setSignal(`APPROVED SIGNAL: ${playerName} (${phoneNumber}) approved for ${numsLabel}.`, "approved");
         document.getElementById("admin-status").textContent = msg;
       } else {
-        const { error } = await supabase.from("pool_entries").delete().eq("id", id);
-        if (error) return alert(`Error: ${error.message}`);
-        const msg = `DISAPPROVED: ${item.player}'s entry rejected. Number #${item.num} returned to board.`;
+        const { error } = await supabase
+          .from("pool_entries")
+          .delete()
+          .in("id", ids);
+
+        if (error) {
+          if (card) card.querySelectorAll("button").forEach((b) => (b.disabled = false));
+          setSignal(`FAILED to disapprove ${playerName} (${phoneNumber}): ${error.message}`, "disapproved");
+          return alert(`Error: ${error.message}`);
+        }
+
+        const msg = `DISAPPROVED: ${playerName} (${phoneNumber}) — Numbers ${numsLabel} returned to board.`;
         await supabase.from("pool_state").update({ last_announcement: msg }).eq("id", "main");
+        if (card) card.remove();
+        setSignal(`DISAPPROVED SIGNAL: ${playerName} (${phoneNumber}) rejected; ${numsLabel} returned to Player Board.`, "disapproved");
         document.getElementById("admin-status").textContent = msg;
       }
 
@@ -252,17 +384,19 @@
         [approved[i], approved[j]] = [approved[j], approved[i]];
       }
       const winner = approved[secureRandomIndex(approved.length)];
+      const winnerPhone = winner.phone_number ? ` (${winner.phone_number})` : "";
 
       const pot = approved.length * state.stakeAmount;
       const winnerShare = Number((pot * 0.75).toFixed(2));
       const adminShare = Number((pot - winnerShare).toFixed(2));
 
-      const publicMsg = `WINNER DRAWN: ${winner.player} (Number #${winner.num}) | Winner Prize: ${winnerShare} ETB`;
-      const adminMsg = `WINNER: ${winner.player} (#${winner.num}) | Total Pot: ${pot} ETB | Winner (75%): ${winnerShare} ETB | Admin (25%): ${adminShare} ETB`;
+      const publicMsg = `WINNER DRAWN: ${winner.player}${winnerPhone} (Number #${winner.num}) | Winner Prize: ${winnerShare} ETB`;
+      const adminMsg = `WINNER: ${winner.player}${winnerPhone} (#${winner.num}) | Total Pot: ${pot} ETB | Winner (75%): ${winnerShare} ETB | Admin (25%): ${adminShare} ETB`;
 
       await supabase.from("pool_entries").delete().neq("id", "");
       await supabase.from("pool_state").update({ last_announcement: publicMsg }).eq("id", "main");
 
+      setSignal(`WINNER DRAWN: ${winner.player}${winnerPhone} — Number #${winner.num} (${winnerShare} ETB)`, "approved");
       document.getElementById("admin-status").textContent = adminMsg;
       await renderAdminUI();
     });
@@ -279,7 +413,7 @@
 
     setInterval(() => {
       if (isUnlocked) renderAdminUI();
-    }, 3000);
+    }, 12000);
   </script>
 </body>
 </html>
