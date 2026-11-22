@@ -25,7 +25,7 @@
       </div>
 
       <div class="stats">
-        <div>Stake: <strong><span id="admin-stake">10</span> ETB</strong></div>
+        <div>Stake: <strong><span id="admin-stake">100</span> ETB</strong></div>
         <div>Approved: <strong id="admin-approved">0</strong> / <strong id="admin-max">200</strong></div>
         <div>Pending: <strong id="admin-pending">0</strong></div>
         <div>Total Pot: <strong id="admin-pot">0</strong> ETB</div>
@@ -33,7 +33,7 @@
         <div>Admin (25%): <strong id="admin-cut-share">0</strong> ETB</div>
       </div>
 
-      <div id="admin-status" class="status">Ready. Submissions appear here as soon as a player clicks Submit & Lock Numbers.</div>
+      <div id="admin-status" class="status">Ready. Submissions appear here automatically when a player clicks Submit & Lock Numbers.</div>
 
       <h4>1. Pending Payment Screenshots</h4>
       <div id="admin-queue" class="queue">No pending screenshots.</div>
@@ -41,13 +41,19 @@
       <h4>2. Draw 1 Sole Winner (75% Winner / 25% Admin)</h4>
       <button id="draw-btn" type="button" class="btn-green">Draw 1 Winner Now</button>
 
-      <h4>3. Edit Bank / Telebirr Account (Shown to Players)</h4>
+      <h4>3. Set Stake Amount per Number (ETB)</h4>
+      <form id="stake-form" class="form">
+        <input id="stake-input" type="number" min="1" placeholder="e.g., 100 or 1000" required />
+        <button type="submit" class="btn-primary">Save Stake</button>
+      </form>
+
+      <h4>4. Edit Bank / Telebirr Account (Shown to Players)</h4>
       <form id="bank-form" class="form">
-        <input id="bank-input" type="text" placeholder="e.g., Telebirr 09xxxxxxxx or CBE 1000xxxxxxxx" required />
+        <input id="bank-input" type="text" placeholder="e.g., Telebirr 0914789200 or CBE 1000xxxx" required />
         <button type="submit" class="btn-primary">Save Account</button>
       </form>
 
-      <h4>4. Set Max Player Limit (100 to 500)</h4>
+      <h4>5. Set Max Player Limit (100 to 500)</h4>
       <form id="limit-form" class="form">
         <input id="limit-input" type="number" min="100" max="500" value="200" required />
         <button type="submit" class="btn-primary">Update Limit</button>
@@ -60,21 +66,26 @@
 
     const SUPABASE_URL = "https://wjvforynqwtsnowuthqc.supabase.co/rest/v1/";
     const SUPABASE_ANON_KEY = "sb_publishable_0RCBCTU0R395x4_AH9cnTg_KAt2Vak6";
-    const STAKE = 10;
 
     // REPLACE THIS WITH YOUR OWN STRONG PASSWORD
-    const ADMIN_PASSWORD = "hrit@123";
+    const ADMIN_PASSWORD = "hrit@1231964ec";
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let isUnlocked = false;
 
     async function fetchGameState() {
-      const [{ data: stateRow }, { data: entriesRows }] = await Promise.all([
+      const [{ data: stateRow, error: stateErr }, { data: entriesRows, error: entriesErr }] = await Promise.all([
         supabase.from("pool_state").select("*").eq("id", "main").single(),
         supabase.from("pool_entries").select("*").order("created_at", { ascending: true }),
       ]);
 
+      if (stateErr || entriesErr) {
+        const msg = (stateErr || entriesErr).message;
+        document.getElementById("admin-status").textContent = `Database error: ${msg}`;
+      }
+
       return {
+        stakeAmount: stateRow?.stake_amount ?? 100,
         maxPlayers: stateRow?.max_players ?? 200,
         totalNumbers: stateRow?.total_numbers ?? 200,
         paymentAccount: stateRow?.payment_account ?? "Telebirr / Bank: Set account in Admin Board",
@@ -107,20 +118,20 @@
     async function renderAdminUI() {
       if (!isUnlocked) return;
       const state = await fetchGameState();
+      const stake = state.stakeAmount;
       const approved = state.entries.filter((x) => x.status === "approved");
       const pending = state.entries.filter((x) => x.status === "pending");
-      const pot = approved.length * STAKE;
+      const pot = approved.length * stake;
       const winnerShare = Number((pot * 0.75).toFixed(2));
       const adminShare = Number((pot - winnerShare).toFixed(2));
 
-      document.getElementById("admin-stake").textContent = STAKE;
+      document.getElementById("admin-stake").textContent = stake;
       document.getElementById("admin-approved").textContent = approved.length;
       document.getElementById("admin-max").textContent = state.maxPlayers;
       document.getElementById("admin-pending").textContent = pending.length;
       document.getElementById("admin-pot").textContent = pot;
       document.getElementById("admin-winner-share").textContent = winnerShare;
       document.getElementById("admin-cut-share").textContent = adminShare;
-      document.getElementById("limit-input").value = state.maxPlayers;
 
       const queueEl = document.getElementById("admin-queue");
       if (pending.length === 0) {
@@ -185,6 +196,26 @@
       await renderAdminUI();
     }
 
+    document.getElementById("stake-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!isUnlocked) return;
+      const input = document.getElementById("stake-input");
+      const newStake = Number(input.value);
+      if (!Number.isFinite(newStake) || newStake < 1) {
+        alert("Enter a valid stake amount (1 ETB or higher).");
+        return;
+      }
+
+      const { error } = await supabase.from("pool_state").update({ stake_amount: newStake }).eq("id", "main");
+      if (error) {
+        alert(`Could not save stake: ${error.message}`);
+        return;
+      }
+      input.value = "";
+      document.getElementById("admin-status").textContent = `Stake per number updated to ${newStake} ETB.`;
+      await renderAdminUI();
+    });
+
     document.getElementById("bank-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       if (!isUnlocked) return;
@@ -234,6 +265,7 @@
     document.getElementById("draw-btn").addEventListener("click", async () => {
       if (!isUnlocked) return;
       const state = await fetchGameState();
+      const stake = state.stakeAmount;
       const approved = state.entries.filter((x) => x.status === "approved");
       if (approved.length === 0) {
         alert("Approve at least 1 player before drawing a winner.");
@@ -244,15 +276,18 @@
       window.crypto.getRandomValues(rand);
       const winner = approved[rand[0] % approved.length];
 
-      const pot = approved.length * STAKE;
+      const pot = approved.length * stake;
       const winnerShare = Number((pot * 0.75).toFixed(2));
       const adminShare = Number((pot - winnerShare).toFixed(2));
-      const summary = `WINNER: ${winner.player} (Number #${winner.num}) | Total Pot: ${pot} ETB | Winner (75%): ${winnerShare} ETB | Admin (25%): ${adminShare} ETB`;
+
+      // Public message shows only the winner and winner's prize (hides admin 25% cut)
+      const publicMsg = `WINNER: ${winner.player} (Number #${winner.num}) | Winner Prize: ${winnerShare} ETB`;
+      const adminMsg = `WINNER: ${winner.player} (Number #${winner.num}) | Total Pot: ${pot} ETB | Winner (75%): ${winnerShare} ETB | Admin (25%): ${adminShare} ETB`;
 
       await supabase.from("pool_entries").delete().neq("id", "");
-      await supabase.from("pool_state").update({ last_announcement: summary }).eq("id", "main");
+      await supabase.from("pool_state").update({ last_announcement: publicMsg }).eq("id", "main");
 
-      document.getElementById("admin-status").textContent = summary;
+      document.getElementById("admin-status").textContent = adminMsg;
       await renderAdminUI();
     });
 
@@ -265,6 +300,10 @@
         if (isUnlocked) renderAdminUI();
       })
       .subscribe();
+
+    setInterval(() => {
+      if (isUnlocked) renderAdminUI();
+    }, 4000);
   </script>
 </body>
 </html>
