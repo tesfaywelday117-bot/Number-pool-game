@@ -11,17 +11,15 @@
     <h2>Pick Up to 5 Numbers & Send Screenshot</h2>
 
     <div class="payment-banner">
-      <div><strong>Send Stake (<span id="stake-banner">10</span> ETB per number) To:</strong></div>
-      <div id="player-bank-display">Telebirr / Bank: Set account in Admin Board</div>
+      <div><strong>Send Stake (<span id="stake-banner">100</span> ETB per number) To:</strong></div>
+      <div id="player-bank-display">Loading payment account...</div>
     </div>
 
     <div class="stats">
-      <div>Stake: <strong><span id="stake-stat">10</span> ETB</strong></div>
-      <div>Approved: <strong id="approved-count">0</strong> / <strong id="max-players-stat">200</strong></div>
+      <div>Stake / Number: <strong><span id="stake-stat">100</span> ETB</strong></div>
+      <div>Joined: <strong id="approved-count">0</strong> / <strong id="max-players-stat">200</strong></div>
       <div>Pending: <strong id="pending-count">0</strong></div>
-      <div>Total Pot: <strong id="pot-amount">0</strong> ETB</div>
-      <div>Winner (75%): <strong id="winner-share">0</strong> ETB</div>
-      <div>Admin (25%): <strong id="admin-share">0</strong> ETB</div>
+      <div>Winner Prize: <strong id="winner-share">0</strong> ETB</div>
     </div>
 
     <div class="legend">
@@ -51,18 +49,18 @@
 
     const SUPABASE_URL = "https://wjvforynqwtsnowuthqc.supabase.co/rest/v1/";
     const SUPABASE_ANON_KEY = "sb_publishable_0RCBCTU0R395x4_AH9cnTg_KAt2Vak6";
-    const STAKE = 10;
     const MAX_PICKS_PER_PLAYER = 5;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let selectedNums = new Set();
+    let currentStake = 100;
 
     function updatePickSummary() {
       const picks = Array.from(selectedNums).sort((a, b) => a - b);
       const label = picks.length ? picks.map((n) => `#${n}`).join(", ") : "None";
-      const totalCost = picks.length * STAKE;
+      const totalCost = picks.length * currentStake;
       document.getElementById("pick-summary").innerHTML =
-        `Selected Numbers: <strong>${label}</strong> | Picks: <strong>${picks.length} / ${MAX_PICKS_PER_PLAYER}</strong> | Total Stake: <strong>${totalCost} ETB</strong>`;
+        `Selected Numbers: <strong>${label}</strong> | Picks: <strong>${picks.length} / ${MAX_PICKS_PER_PLAYER}</strong> | Total To Pay: <strong>${totalCost} ETB</strong>`;
     }
 
     async function fetchGameState() {
@@ -72,10 +70,12 @@
       ]);
 
       if (stateErr || entriesErr) {
-        console.error("Supabase read error:", stateErr || entriesErr);
+        const msg = (stateErr || entriesErr).message;
+        document.getElementById("player-bank-display").textContent = `Database connection error: ${msg}`;
       }
 
       return {
+        stakeAmount: stateRow?.stake_amount ?? 100,
         maxPlayers: stateRow?.max_players ?? 200,
         totalNumbers: stateRow?.total_numbers ?? 200,
         paymentAccount: stateRow?.payment_account ?? "Telebirr / Bank: Set account in Admin Board",
@@ -144,21 +144,19 @@
 
     async function renderPlayerUI() {
       const state = await fetchGameState();
+      currentStake = state.stakeAmount;
       const approved = state.entries.filter((e) => e.status === "approved");
       const pending = state.entries.filter((e) => e.status === "pending");
-      const pot = approved.length * STAKE;
+      const pot = approved.length * currentStake;
       const winnerShare = Number((pot * 0.75).toFixed(2));
-      const adminShare = Number((pot - winnerShare).toFixed(2));
 
-      document.getElementById("stake-banner").textContent = STAKE;
-      document.getElementById("stake-stat").textContent = STAKE;
+      document.getElementById("stake-banner").textContent = currentStake;
+      document.getElementById("stake-stat").textContent = currentStake;
       document.getElementById("player-bank-display").textContent = state.paymentAccount;
       document.getElementById("approved-count").textContent = approved.length;
       document.getElementById("max-players-stat").textContent = state.maxPlayers;
       document.getElementById("pending-count").textContent = pending.length;
-      document.getElementById("pot-amount").textContent = pot;
       document.getElementById("winner-share").textContent = winnerShare;
-      document.getElementById("admin-share").textContent = adminShare;
       document.getElementById("status").textContent = state.lastAnnouncement;
 
       buildGrid(state);
@@ -176,6 +174,7 @@
     document.getElementById("proof-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const state = await fetchGameState();
+      currentStake = state.stakeAmount;
       const activeCount = state.entries.filter((x) => x.status === "approved" || x.status === "pending").length;
       const numMap = getNumberMap(state.entries);
       const picks = Array.from(selectedNums).sort((a, b) => a - b);
@@ -227,7 +226,7 @@
       await supabase
         .from("pool_state")
         .update({
-          last_announcement: `Numbers [${picks.map((n) => "#" + n).join(", ")}] are now PENDING for ${playerName} (${picks.length * STAKE} ETB total stake).`,
+          last_announcement: `Numbers [${picks.map((n) => "#" + n).join(", ")}] are now PENDING for ${playerName} (${picks.length * currentStake} ETB paid).`,
         })
         .eq("id", "main");
 
@@ -240,14 +239,11 @@
 
     supabase
       .channel("player-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "pool_entries" }, () => {
-        renderPlayerUI();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "pool_state" }, () => {
-        renderPlayerUI();
-      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "pool_entries" }, () => renderPlayerUI())
+      .on("postgres_changes", { event: "*", schema: "public", table: "pool_state" }, () => renderPlayerUI())
       .subscribe();
 
+    setInterval(renderPlayerUI, 5000);
     updatePickSummary();
     renderPlayerUI();
   </script>
