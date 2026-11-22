@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Board — Owner Control</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="box">
+    <h2>Owner Admin Control Board</h2>
+
+    <div id="admin-lock-box" class="admin-lock">
+      <h3>Locked — Enter Strong Admin Password</h3>
+      <form id="unlock-form" class="form">
+        <input id="admin-pass-input" type="password" placeholder="Enter Strong Admin Password" required />
+        <button type="submit" class="btn-primary">Unlock Admin Board</button>
+      </form>
+    </div>
+
+    <div id="admin-panel" class="admin-panel hidden">
+      <div class="admin-header">
+        <h3>Admin Unlocked</h3>
+        <button id="lock-admin-btn" type="button" class="btn-reject">Lock Board</button>
+      </div>
+
+      <div class="stats">
+        <div>Stake: <strong><span id="admin-stake">10</span> ETB</strong></div>
+        <div>Approved: <strong id="admin-approved">0</strong> / <strong id="admin-max">200</strong></div>
+        <div>Pending: <strong id="admin-pending">0</strong></div>
+        <div>Total Pot: <strong id="admin-pot">0</strong> ETB</div>
+        <div>Winner (75%): <strong id="admin-winner-share">0</strong> ETB</div>
+        <div>Admin (25%): <strong id="admin-cut-share">0</strong> ETB</div>
+      </div>
+
+      <div id="admin-status" class="status">Ready to review payment screenshots.</div>
+
+      <h4>1. Pending Payment Screenshots</h4>
+      <div id="admin-queue" class="queue">No pending screenshots.</div>
+
+      <h4>2. Draw 1 Sole Winner (75% Winner / 25% Admin)</h4>
+      <button id="draw-btn" type="button" class="btn-green">Draw 1 Winner Now</button>
+
+      <h4>3. Edit Bank / Telebirr Account (Shown to Players)</h4>
+      <form id="bank-form" class="form">
+        <input id="bank-input" type="text" placeholder="e.g., Telebirr 09xxxxxxxx or CBE 1000xxxxxxxx" required />
+        <button type="submit" class="btn-primary">Save Account</button>
+      </form>
+
+      <h4>4. Set Max Player Limit (100 to 500)</h4>
+      <form id="limit-form" class="form">
+        <input id="limit-input" type="number" min="100" max="500" value="200" required />
+        <button type="submit" class="btn-primary">Update Limit</button>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+    const SUPABASE_URL = "https://wjvforynqwtsnowuthqc.supabase.co/rest/v1/";
+    const SUPABASE_ANON_KEY = "sb_publishable_0RCBCTU0R395x4_AH9cnTg_KAt2Vak6";
+    const STAKE = 10;
+
+    // REPLACE THIS WITH YOUR OWN STRONG PASSWORD
+    const ADMIN_PASSWORD = "hrit@123";
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    let isUnlocked = false;
+
+    async function fetchGameState() {
+      const [{ data: stateRow }, { data: entriesRows }] = await Promise.all([
+        supabase.from("pool_state").select("*").eq("id", "main").single(),
+        supabase.from("pool_entries").select("*").order("created_at", { ascending: true }),
+      ]);
+
+      return {
+        maxPlayers: stateRow?.max_players ?? 200,
+        totalNumbers: stateRow?.total_numbers ?? 200,
+        paymentAccount: stateRow?.payment_account ?? "Telebirr / Bank: Set account in Admin Board",
+        lastAnnouncement: stateRow?.last_announcement ?? "Ready.",
+        entries: entriesRows ?? [],
+      };
+    }
+
+    document.getElementById("unlock-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const passInput = document.getElementById("admin-pass-input");
+      if (passInput.value === ADMIN_PASSWORD) {
+        isUnlocked = true;
+        passInput.value = "";
+        document.getElementById("admin-lock-box").classList.add("hidden");
+        document.getElementById("admin-panel").classList.remove("hidden");
+        await renderAdminUI();
+      } else {
+        alert("Incorrect Admin Password.");
+        passInput.value = "";
+      }
+    });
+
+    document.getElementById("lock-admin-btn").addEventListener("click", () => {
+      isUnlocked = false;
+      document.getElementById("admin-panel").classList.add("hidden");
+      document.getElementById("admin-lock-box").classList.remove("hidden");
+    });
+
+    async function renderAdminUI() {
+      if (!isUnlocked) return;
+      const state = await fetchGameState();
+      const approved = state.entries.filter((x) => x.status === "approved");
+      const pending = state.entries.filter((x) => x.status === "pending");
+      const pot = approved.length * STAKE;
+      const winnerShare = Number((pot * 0.75).toFixed(2));
+      const adminShare = Number((pot - winnerShare).toFixed(2));
+
+      document.getElementById("admin-stake").textContent = STAKE;
+      document.getElementById("admin-approved").textContent = approved.length;
+      document.getElementById("admin-max").textContent = state.maxPlayers;
+      document.getElementById("admin-pending").textContent = pending.length;
+      document.getElementById("admin-pot").textContent = pot;
+      document.getElementById("admin-winner-share").textContent = winnerShare;
+      document.getElementById("admin-cut-share").textContent = adminShare;
+      document.getElementById("limit-input").value = state.maxPlayers;
+
+      const queueEl = document.getElementById("admin-queue");
+      if (pending.length === 0) {
+        queueEl.textContent = "No pending screenshots.";
+        return;
+      }
+
+      queueEl.innerHTML = "";
+      pending.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "queue-item";
+        row.innerHTML = `
+          <div>
+            <strong>${item.player}</strong> — Number <strong>#${item.num}</strong><br/>
+            <small>${item.file_name}</small>
+          </div>
+          <a href="${item.preview_data_url}" target="_blank" rel="noopener">
+            <img class="thumb" src="${item.preview_data_url}" alt="Payment proof" />
+          </a>
+          <div>
+            <button type="button" class="btn-green" data-approve="${item.id}">Approve</button>
+            <button type="button" class="btn-reject" data-reject="${item.id}">Reject / Free</button>
+          </div>
+        `;
+        queueEl.appendChild(row);
+      });
+
+      queueEl.querySelectorAll("[data-approve]").forEach((btn) => {
+        btn.addEventListener("click", () => decideEntry(btn.dataset.approve, true));
+      });
+      queueEl.querySelectorAll("[data-reject]").forEach((btn) => {
+        btn.addEventListener("click", () => decideEntry(btn.dataset.reject, false));
+      });
+    }
+
+    async function decideEntry(id, approve) {
+      if (!isUnlocked) return;
+      const state = await fetchGameState();
+      const item = state.entries.find((x) => x.id === id);
+      if (!item) return;
+
+      if (approve) {
+        await supabase.from("pool_entries").update({ status: "approved" }).eq("id", id);
+        const msg = `APPROVED: ${item.player} on Number #${item.num}. Number locked into round.`;
+        await supabase.from("pool_state").update({ last_announcement: msg }).eq("id", "main");
+        document.getElementById("admin-status").textContent = msg;
+      } else {
+        await supabase.from("pool_entries").delete().eq("id", id);
+        const msg = `REJECTED: ${item.player}'s screenshot. Number #${item.num} is selectable again.`;
+        await supabase.from("pool_state").update({ last_announcement: msg }).eq("id", "main");
+        document.getElementById("admin-status").textContent = msg;
+      }
+
+      await renderAdminUI();
+    }
+
+    document.getElementById("bank-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!isUnlocked) return;
+      const input = document.getElementById("bank-input");
+      const val = input.value.trim();
+      if (!val) return;
+
+      await supabase.from("pool_state").update({ payment_account: val }).eq("id", "main");
+      input.value = "";
+      document.getElementById("admin-status").textContent = `Updated player payment account to: ${val}`;
+      await renderAdminUI();
+    });
+
+    document.getElementById("limit-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!isUnlocked) return;
+      const newLimit = Number(document.getElementById("limit-input").value);
+      if (!Number.isInteger(newLimit) || newLimit < 100 || newLimit > 500) {
+        alert("Player limit must be between 100 and 500.");
+        return;
+      }
+
+      const state = await fetchGameState();
+      if (newLimit < state.entries.length) {
+        alert(`Cannot set limit below current entries (${state.entries.length}).`);
+        return;
+      }
+
+      await supabase
+        .from("pool_state")
+        .update({ max_players: newLimit, total_numbers: newLimit })
+        .eq("id", "main");
+
+      document.getElementById("admin-status").textContent = `Max player limit updated to ${newLimit}.`;
+      await renderAdminUI();
+    });
+
+    document.getElementById("draw-btn").addEventListener("click", async () => {
+      if (!isUnlocked) return;
+      const state = await fetchGameState();
+      const approved = state.entries.filter((x) => x.status === "approved");
+      if (approved.length === 0) {
+        alert("Approve at least 1 player before drawing a winner.");
+        return;
+      }
+
+      const rand = new Uint32Array(1);
+      window.crypto.getRandomValues(rand);
+      const winner = approved[rand[0] % approved.length];
+
+      const pot = approved.length * STAKE;
+      const winnerShare = Number((pot * 0.75).toFixed(2));
+      const adminShare = Number((pot - winnerShare).toFixed(2));
+      const summary = `WINNER: ${winner.player} (Number #${winner.num}) | Total Pot: ${pot} ETB | Winner (75%): ${winnerShare} ETB | Admin (25%): ${adminShare} ETB`;
+
+      await supabase.from("pool_entries").delete().neq("id", "");
+      await supabase.from("pool_state").update({ last_announcement: summary }).eq("id", "main");
+
+      document.getElementById("admin-status").textContent = summary;
+      await renderAdminUI();
+    });
+
+    supabase
+      .channel("admin-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "pool_entries" }, () => {
+        if (isUnlocked) renderAdminUI();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "pool_state" }, () => {
+        if (isUnlocked) renderAdminUI();
+      })
+      .subscribe();
+  </script>
+</body>
+</html>
