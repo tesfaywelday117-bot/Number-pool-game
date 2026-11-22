@@ -23,11 +23,20 @@
       margin-top: 10px;
       font-size: 0.92rem;
     }
+    .lookup-summary {
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.09);
+      line-height: 1.45;
+    }
     .lookup-batch {
       padding: 8px 10px;
       margin-bottom: 8px;
       border-radius: 8px;
       background: rgba(255, 255, 255, 0.06);
+      line-height: 1.45;
+      word-break: break-word;
     }
     .badge-pending {
       color: #ffd166;
@@ -37,6 +46,10 @@
       color: #7ef2a6;
       font-weight: 700;
     }
+    .badge-winner {
+      color: #38bdf8;
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
@@ -44,7 +57,7 @@
     <h2>Select Your Numbers & Enter Phone Number</h2>
 
     <div class="payment-banner">
-      <div><strong>Payment Account (Send Stake Here):</strong></div>
+      <div><strong>Owner / Admin Payment Account (Send Stake Here):</strong></div>
       <div id="player-bank-display">Loading payment account...</div>
     </div>
 
@@ -63,15 +76,16 @@
     <form id="proof-form" class="form">
       <input id="player-name" type="text" placeholder="Write your full name" required />
       <input id="player-phone" type="tel" placeholder="Your phone number (e.g., 0912345678)" required />
+      <input id="payment-link" type="text" placeholder="Player payment link or transaction reference" required />
       <button id="submit-btn" type="submit" class="btn-primary">Submit</button>
     </form>
 
-    <div id="status" class="status">Select any numbers you want, enter your name and phone number, and tap Submit.</div>
+    <div id="status" class="status">Select any numbers you want, enter your name, phone number, and payment link, and tap Submit.</div>
 
     <div class="lookup-box">
       <div><strong>Check My Numbers (By Phone Number)</strong></div>
       <div class="lookup-row">
-        <input id="lookup-phone" type="tel" placeholder="Enter phone number to check status" />
+        <input id="lookup-phone" type="tel" placeholder="Enter phone number to check status, stake & winner match" />
         <button id="lookup-btn" type="button" class="btn-primary">Check</button>
       </div>
       <div id="lookup-results" class="lookup-results"></div>
@@ -81,7 +95,6 @@
   <script type="module">
     import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-    // PASTE YOUR EXACT https://xxxx.supabase.co URL AND sb_publishable_... KEY BELOW
     const SUPABASE_URL = "https://txvjpshxgasdbdygemis.supabase.co".trim();
     const SUPABASE_ANON_KEY = "sb_publishable_6oUoQaH7a-CYFG6o2Hu6zQ_e9OUIfeN".trim();
 
@@ -89,6 +102,7 @@
     let selectedNums = new Set();
     let currentStake = 100;
     let latestEntries = [];
+    let latestAnnouncement = "";
 
     function escapeHtml(str) {
       return String(str ?? "")
@@ -100,6 +114,11 @@
 
     function normalizePhone(phone) {
       return String(phone ?? "").trim().replace(/\s+/g, "");
+    }
+
+    function extractWinnerNumber(announcement) {
+      const match = String(announcement ?? "").match(/Number\s*#(\d+)/i);
+      return match ? Number(match[1]) : null;
     }
 
     function updatePickSummary() {
@@ -119,7 +138,7 @@
           .single(),
         supabase
           .from("pool_entries")
-          .select("id, player, phone_number, batch_id, num, status, created_at")
+          .select("id, player, phone_number, batch_id, payment_link, num, status, created_at")
           .order("created_at", { ascending: true }),
       ]);
 
@@ -131,7 +150,7 @@
       return {
         maxPlayers: stateRow?.max_players ?? 200,
         stakeAmount: stateRow?.stake_amount ?? 100,
-        paymentAccount: stateRow?.payment_account ?? "Set your Telebirr / Bank account in Admin Board",
+        paymentAccount: stateRow?.payment_account ?? "Set Owner/Admin account in Admin Board",
         lastAnnouncement: stateRow?.last_announcement ?? "Ready.",
         entries: entriesRows ?? [],
       };
@@ -201,6 +220,14 @@
         return;
       }
 
+      const approvedCount = matching.filter((e) => e.status === "approved").length;
+      const pendingCount = matching.filter((e) => e.status === "pending").length;
+      const totalStake = matching.length * currentStake;
+      const winnerNum = extractWinnerNumber(latestAnnouncement);
+      const matchedWinnerNums = winnerNum
+        ? matching.filter((e) => Number(e.num) === winnerNum).map((e) => `#${Number(e.num)}`)
+        : [];
+
       const groups = new Map();
       for (const entry of matching) {
         const key = entry.batch_id || `single-${entry.id}`;
@@ -208,13 +235,26 @@
           groups.set(key, {
             player: entry.player || "Player",
             phone: entry.phone_number || phone,
+            paymentLink: entry.payment_link || "",
             items: [],
           });
         }
         groups.get(key).items.push(entry);
       }
 
-      outEl.innerHTML = Array.from(groups.values())
+      const summaryHtml = `
+        <div class="lookup-summary">
+          <div><strong>Summary for ${escapeHtml(phone)}:</strong> ${matching.length} number(s) | Total Stake: <strong>${totalStake} ETB</strong></div>
+          <div><span class="badge-approved">Approved: ${approvedCount}</span> | <span class="badge-pending">Pending: ${pendingCount}</span></div>
+          ${
+            matchedWinnerNums.length
+              ? `<div class="badge-winner">Winner Match: ${matchedWinnerNums.join(", ")}</div>`
+              : ""
+          }
+        </div>
+      `;
+
+      const batchesHtml = Array.from(groups.values())
         .map((g) => {
           const sortedNums = g.items
             .map((x) => Number(x.num))
@@ -232,16 +272,20 @@
           return `
             <div class="lookup-batch">
               <div><strong>${escapeHtml(g.player)}</strong> (${escapeHtml(g.phone)}) — ${statusText}</div>
-              <div>Numbers (${g.items.length}): <strong>${sortedNums}</strong></div>
+              <div>Numbers (${g.items.length}): <strong>${sortedNums}</strong> (${g.items.length * currentStake} ETB)</div>
+              ${g.paymentLink ? `<div>Payment Link/Ref: <span>${escapeHtml(g.paymentLink)}</span></div>` : ""}
             </div>
           `;
         })
         .join("");
+
+      outEl.innerHTML = summaryHtml + batchesHtml;
     }
 
     async function renderPlayerUI() {
       const state = await fetchGameState();
       latestEntries = state.entries;
+      latestAnnouncement = state.lastAnnouncement;
       currentStake = state.stakeAmount;
       const approvedCount = state.entries.filter((e) => e.status === "approved").length;
       const pot = approvedCount * currentStake;
@@ -278,13 +322,15 @@
 
       const nameInput = document.getElementById("player-name");
       const phoneInput = document.getElementById("player-phone");
+      const linkInput = document.getElementById("payment-link");
       const submitBtn = document.getElementById("submit-btn");
 
       const playerName = nameInput.value.trim();
       const phoneNumber = normalizePhone(phoneInput.value);
+      const paymentLink = linkInput.value.trim();
 
-      if (!playerName || !phoneNumber) {
-        alert("Please enter both your full name and your phone number.");
+      if (!playerName || !phoneNumber || !paymentLink) {
+        alert("Please enter your name, phone number, and payment link.");
         return;
       }
 
@@ -298,6 +344,7 @@
         player: playerName,
         phone_number: phoneNumber,
         batch_id: batchId,
+        payment_link: paymentLink,
         num,
         status: "pending",
       }));
@@ -323,6 +370,7 @@
       selectedNums.clear();
       nameInput.value = "";
       phoneInput.value = "";
+      linkInput.value = "";
       document.getElementById("lookup-phone").value = phoneNumber;
       submitBtn.textContent = "Submitted!";
       submitBtn.className = "btn-submitted";
